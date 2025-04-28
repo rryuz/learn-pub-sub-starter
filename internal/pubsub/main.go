@@ -14,6 +14,14 @@ const (
 	Transient
 )
 
+type AckType int
+
+const (
+	Ack AckType = iota
+	NackRequeue
+	NackDiscard
+)
+
 func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 	valBytes, err := json.Marshal(val)
 	if err != nil {
@@ -58,7 +66,9 @@ func DeclareAndBind(
 		autoDelete,
 		exclusive,
 		false,
-		nil,
+		amqp.Table{
+			"x-dead-letter-exchange": "peril_dlx",
+		},
 	)
 	if err != nil {
 		return nil, amqp.Queue{}, err
@@ -70,4 +80,44 @@ func DeclareAndBind(
 	}
 
 	return newChannel, newQueue, nil
+}
+
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType QueueType,
+	handler func(T) AckType,
+) error {
+	connChannel, _, err := DeclareAndBind(conn, exchange, queueName, key, simpleQueueType)
+	if err != nil {
+		return err
+	}
+
+	queueDeliveryChan, err := connChannel.Consume(queueName, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for message := range queueDeliveryChan {
+			messageStruct := new(T)
+			err := json.Unmarshal(message.Body, messageStruct)
+			if err != nil {
+				return
+			}
+			ack := handler(*messageStruct)
+			switch ack {
+			case Ack:
+				message.Ack(false)
+			case NackRequeue:
+				message.Nack(false, true)
+			case NackDiscard:
+				message.Nack(false, false)
+			}
+		}
+	}()
+
+	return nil
 }

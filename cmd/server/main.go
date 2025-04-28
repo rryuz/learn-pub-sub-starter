@@ -29,15 +29,26 @@ func main() {
 		log.Fatal(err)
 	}
 
+	_, _, err = pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		fmt.Sprintf("%s.*", routing.GameLogSlug),
+		pubsub.Durable,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	gamelogic.PrintServerHelp()
 
 mainLoop:
 	for {
-		userInput := gamelogic.GetInput()
-		if len(userInput) == 0 {
+		serverInput := gamelogic.GetInput()
+		if len(serverInput) == 0 {
 			continue
 		}
-		switch userInput[0] {
+		switch serverInput[0] {
 		case "pause":
 			fmt.Println("Sending pause message")
 			err = pubsub.PublishJSON(connChannel, routing.ExchangePerilDirect, routing.PauseKey, routing.PlayingState{
