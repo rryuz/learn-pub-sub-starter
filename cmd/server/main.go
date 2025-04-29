@@ -10,66 +10,72 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-const connString = "amqp://guest:guest@localhost:5672/"
-
 func main() {
-	fmt.Println("Starting Peril server...")
+	const rabbitConnString = "amqp://guest:guest@localhost:5672/"
 
-	// Connect to RabbitMQ
-	conn, err := amqp.Dial(connString)
+	conn, err := amqp.Dial(rabbitConnString)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not connect to RabbitMQ: %v", err)
 	}
 	defer conn.Close()
+	fmt.Println("Peril game server connected to RabbitMQ!")
 
-	fmt.Println("Successfully connected to RabbitMQ")
-
-	connChannel, err := conn.Channel()
+	publishCh, err := conn.Channel()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not create channel: %v", err)
 	}
 
-	_, _, err = pubsub.DeclareAndBind(
+	_, queue, err := pubsub.DeclareAndBind(
 		conn,
 		routing.ExchangePerilTopic,
 		routing.GameLogSlug,
-		fmt.Sprintf("%s.*", routing.GameLogSlug),
-		pubsub.Durable,
+		routing.GameLogSlug+".*",
+		pubsub.SimpleQueueDurable,
 	)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not subscribe to pause: %v", err)
 	}
+	fmt.Printf("Queue %v declared and bound!\n", queue.Name)
 
 	gamelogic.PrintServerHelp()
 
-mainLoop:
 	for {
-		serverInput := gamelogic.GetInput()
-		if len(serverInput) == 0 {
+		words := gamelogic.GetInput()
+		if len(words) == 0 {
 			continue
 		}
-		switch serverInput[0] {
+		switch words[0] {
 		case "pause":
-			fmt.Println("Sending pause message")
-			err = pubsub.PublishJSON(connChannel, routing.ExchangePerilDirect, routing.PauseKey, routing.PlayingState{
-				IsPaused: true,
-			})
+			fmt.Println("Publishing paused game state")
+			err = pubsub.PublishJSON(
+				publishCh,
+				routing.ExchangePerilDirect,
+				routing.PauseKey,
+				routing.PlayingState{
+					IsPaused: true,
+				},
+			)
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("could not publish time: %v", err)
 			}
 		case "resume":
-			fmt.Println("Sending pause message")
-			err = pubsub.PublishJSON(connChannel, routing.ExchangePerilDirect, routing.PauseKey, routing.PlayingState{
-				IsPaused: false,
-			})
+			fmt.Println("Publishing resumes game state")
+			err = pubsub.PublishJSON(
+				publishCh,
+				routing.ExchangePerilDirect,
+				routing.PauseKey,
+				routing.PlayingState{
+					IsPaused: false,
+				},
+			)
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("could not publish time: %v", err)
 			}
 		case "quit":
-			fmt.Println("Exiting")
-			break mainLoop
+			log.Println("goodbye")
+			return
 		default:
-			fmt.Println("Command not supported")
+			fmt.Println("unknown command")
 		}
 	}
 }
